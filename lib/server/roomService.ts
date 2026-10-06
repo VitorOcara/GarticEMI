@@ -554,7 +554,7 @@ export async function submitGuess(code: string, playerId: string, message: strin
       room.id,
       playerId,
       player.name,
-      `${player.name} acertou! (+${guessPoints} pts)`
+      `${player.name} acertou a palavra (+${guessPoints} pts)`
     );
 
     const players = await listPlayers(room.id);

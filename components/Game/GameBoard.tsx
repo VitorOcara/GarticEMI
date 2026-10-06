@@ -81,6 +81,7 @@ export function GameBoard({
             roomCode={roomCode}
             canGuess={!isDrawer && room.status === "playing"}
             guessedThisRound={me?.guessed_this_round ?? false}
+            isDrawer={isDrawer}
           />
         </aside>
       </div>

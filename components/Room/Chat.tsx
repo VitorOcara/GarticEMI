@@ -1,17 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { isCorrectAnnouncement, shouldShowChatMessage } from "@/lib/chatVisibility";
+import type { ChatMessage } from "@/types/chat";
 
-export type ChatMessage = {
-  id: string;
-  player_id: string;
-  player_name: string;
-  message: string;
-  is_correct: boolean;
-  is_system: boolean;
-  created_at: string;
-};
+export type { ChatMessage };
 
 type Props = {
   roomId: string;
@@ -19,6 +13,7 @@ type Props = {
   roomCode: string;
   canGuess: boolean;
   guessedThisRound: boolean;
+  isDrawer: boolean;
 };
 
 export function Chat({
@@ -27,6 +22,7 @@ export function Chat({
   roomCode,
   canGuess,
   guessedThisRound,
+  isDrawer,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [text, setText] = useState("");
@@ -68,9 +64,14 @@ export function Chat({
     };
   }, [roomId]);
 
+  const visibleMessages = useMemo(
+    () => messages.filter((m) => shouldShowChatMessage(m, playerId, isDrawer)),
+    [messages, playerId, isDrawer]
+  );
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [visibleMessages]);
 
   const send = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -95,22 +96,30 @@ export function Chat({
 
   return (
     <div className="box-border flex h-[min(42vh,320px)] w-full max-w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="box-border shrink-0 border-b border-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-700">
-        Chat / Palpites
+      <div className="box-border shrink-0 border-b border-slate-100 px-3 py-2.5">
+        <p className="text-sm font-semibold text-slate-700">Chat / Palpites</p>
+        {isDrawer && (
+          <p className="text-xs text-violet-600">Você vê todos os palpites dos jogadores</p>
+        )}
+        {!isDrawer && (
+          <p className="text-xs text-slate-500">Só você vê seus palpites; acertos aparecem para todos</p>
+        )}
       </div>
       <div className="box-border min-h-0 flex-1 space-y-1 overflow-y-auto overflow-x-hidden p-3 text-sm">
-        {messages.map((m) => (
+        {visibleMessages.map((m) => (
           <div
             key={m.id}
             className={
-              m.is_system
-                ? "text-center text-xs text-slate-500"
-                : m.is_correct
-                  ? "rounded-lg bg-green-50 px-2 py-1 font-medium text-green-800"
-                  : "break-words"
+              isCorrectAnnouncement(m)
+                ? "rounded-lg bg-green-50 px-2 py-1.5 text-center text-sm font-semibold text-green-800"
+                : m.is_system
+                  ? "text-center text-xs text-slate-500"
+                  : m.is_correct
+                    ? "rounded-lg bg-green-50 px-2 py-1 font-medium text-green-800"
+                    : "break-words"
             }
           >
-            {m.is_system ? (
+            {m.is_system || isCorrectAnnouncement(m) ? (
               m.message
             ) : (
               <>
