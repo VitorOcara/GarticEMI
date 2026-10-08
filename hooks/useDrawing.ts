@@ -1,17 +1,30 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { drawStrokeOnContext } from "@/lib/drawing";
+import {
+  DRAW_CLEAR_EVENT,
+  DRAW_STROKE_EVENT,
+  type DrawClearPayload,
+  type DrawStrokePayload,
+} from "@/lib/realtime/drawingEvents";
 import type { Stroke } from "@/types/drawing";
 
 type UseDrawingOptions = {
   roomId: string | null;
   round: number;
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  /** true = desenhista (envia broadcast); false = espectadores (recebem) */
   enabled: boolean;
   onRemoteClear?: () => void;
 };
+
+function getLogicalCanvasSize(canvas: HTMLCanvasElement) {
+  const dpr = window.devicePixelRatio || 1;
+  return { w: canvas.width / dpr, h: canvas.height / dpr };
+}
 
 export function useDrawing({
   roomId,
@@ -20,23 +33,13 @@ export function useDrawing({
   enabled,
   onRemoteClear,
 }: UseDrawingOptions) {
-  const strokesLoaded = useRef(false);
+  const channelRef = useRef<RealtimeChannel | null>(null);
+  const roundRef = useRef(round);
+  const isDrawerRef = useRef(enabled);
+  const applyStrokeRef = useRef<(stroke: Stroke) => void>(() => {});
 
-  const redrawAll = useCallback(
-    (strokes: Stroke[]) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      for (const stroke of strokes) {
-        if (stroke.clear) continue;
-        drawStrokeOnContext(ctx, stroke, canvas.width, canvas.height);
-      }
-    },
-    [canvasRef]
-  );
+  roundRef.current = round;
+  isDrawerRef.current = enabled;
 
   const applyStroke = useCallback(
     (stroke: Stroke) => {
@@ -52,13 +55,15 @@ export function useDrawing({
       }
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      drawStrokeOnContext(ctx, stroke, canvas.width, canvas.height);
+      const { w, h } = getLogicalCanvasSize(canvas);
+      drawStrokeOnContext(ctx, stroke, w, h);
     },
     [canvasRef, onRemoteClear]
   );
 
+  applyStrokeRef.current = applyStroke;
+
   useEffect(() => {
-    strokesLoaded.current = false;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -70,68 +75,61 @@ export function useDrawing({
   useEffect(() => {
     if (!roomId) return;
     const supabase = getSupabaseBrowserClient();
+    const channel = supabase.channel(`drawing:${roomId}`, {
+      config: { broadcast: { self: false } },
+    });
 
-    const loadExisting = async () => {
-      const { data } = await supabase
-        .from("drawing_strokes")
-        .select("stroke")
-        .eq("room_id", roomId)
-        .eq("round_number", round)
-        .order("created_at", { ascending: true });
-      if (data && !strokesLoaded.current) {
-        strokesLoaded.current = true;
-        redrawAll(data.map((r) => r.stroke as Stroke));
-      }
+    channel
+      .on("broadcast", { event: DRAW_STROKE_EVENT }, (message) => {
+        if (isDrawerRef.current) return;
+        const payload = message.payload as DrawStrokePayload;
+        if (payload.round !== roundRef.current) return;
+        applyStrokeRef.current(payload.stroke);
+      })
+      .on("broadcast", { event: DRAW_CLEAR_EVENT }, (message) => {
+        if (isDrawerRef.current) return;
+        const payload = message.payload as DrawClearPayload;
+        if (payload.round !== roundRef.current) return;
+        applyStrokeRef.current({ points: [], color: "", size: 0, clear: true });
+      })
+      .subscribe();
+
+    channelRef.current = channel;
+
+    return () => {
+      channelRef.current = null;
+      void supabase.removeChannel(channel);
     };
-    void loadExisting();
-
-    if (!enabled) {
-      const channel = supabase
-        .channel(`strokes-${roomId}-${round}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "INSERT",
-            schema: "public",
-            table: "drawing_strokes",
-            filter: `room_id=eq.${roomId}`,
-          },
-          (payload) => {
-            const row = payload.new as { round_number: number; stroke: Stroke };
-            if (row.round_number !== round) return;
-            applyStroke(row.stroke);
-          }
-        )
-        .subscribe();
-
-      return () => {
-        void supabase.removeChannel(channel);
-      };
-    }
-  }, [roomId, round, applyStroke, redrawAll, enabled]);
+  }, [roomId]);
 
   const sendStroke = useCallback(
-    async (code: string, playerId: string, stroke: Stroke) => {
-      if (!enabled) return;
-      await fetch(`/api/rooms/${encodeURIComponent(code)}/stroke`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ playerId, stroke, round }),
+    async (_code: string, _playerId: string, stroke: Stroke) => {
+      if (!enabled || !roomId) return;
+      const channel = channelRef.current;
+      if (!channel) return;
+      const payload: DrawStrokePayload = { round: roundRef.current, stroke };
+      void channel.send({
+        type: "broadcast",
+        event: DRAW_STROKE_EVENT,
+        payload,
       });
     },
-    [enabled, round]
+    [enabled, roomId]
   );
 
   const clearCanvasRemote = useCallback(
-    async (code: string, playerId: string) => {
-      if (!enabled) return;
-      await fetch(`/api/rooms/${encodeURIComponent(code)}/clear`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ playerId, round }),
+    async (_code: string, _playerId: string) => {
+      if (!enabled || !roomId) return;
+      const channel = channelRef.current;
+      if (!channel) return;
+      const payload: DrawClearPayload = { round: roundRef.current };
+      void channel.send({
+        type: "broadcast",
+        event: DRAW_CLEAR_EVENT,
+        payload,
       });
     },
-    [enabled, round]
+    [enabled, roomId]
   );
 
   return { sendStroke, clearCanvasRemote, applyStroke };

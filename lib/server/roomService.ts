@@ -1,5 +1,6 @@
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import { generateRoomCode, normalizeRoomCode } from "@/lib/room";
+import { isRoundIntroActive } from "@/lib/game";
 import { pickRandomWord, guessesMatch } from "@/lib/words";
 import {
   pickDrawer,
@@ -440,41 +441,27 @@ export async function submitStroke(
 ) {
   const room = await getRoomByCode(code);
   if (!room || room.status !== "playing") throw new Error("Rodada não ativa");
+  if (isRoundIntroActive(room.round_started_at)) {
+    throw new Error("Aguarde o início da rodada");
+  }
   if (room.drawer_id !== playerId) throw new Error("Apenas o desenhista pode desenhar");
   if (room.current_round !== round) throw new Error("Rodada inválida");
-
-  const supabase = getSupabaseAdmin();
-  const { error } = await supabase.from("drawing_strokes").insert({
-    room_id: room.id,
-    round_number: round,
-    stroke,
-  });
-  if (error) throw new Error(error.message);
+  void stroke;
 }
 
 export async function clearCanvas(code: string, playerId: string, round: number) {
   const room = await getRoomByCode(code);
   if (!room || room.drawer_id !== playerId) throw new Error("Apenas o desenhista pode limpar");
   if (room.current_round !== round) throw new Error("Rodada inválida");
-
-  const supabase = getSupabaseAdmin();
-  await supabase
-    .from("drawing_strokes")
-    .delete()
-    .eq("room_id", room.id)
-    .eq("round_number", round);
-
-  await supabase.from("drawing_strokes").insert({
-    room_id: room.id,
-    round_number: round,
-    stroke: { points: [], color: "", size: 0, clear: true },
-  });
 }
 
 export async function submitGuess(code: string, playerId: string, message: string) {
   const room = await getRoomByCode(code);
   if (!room || room.status !== "playing") {
     throw new Error("Não há palpite neste momento");
+  }
+  if (isRoundIntroActive(room.round_started_at)) {
+    throw new Error("Aguarde o início da rodada");
   }
 
   const supabase = getSupabaseAdmin();

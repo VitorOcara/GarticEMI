@@ -31,6 +31,8 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, Props>(function Drawi
   const containerRef = useRef<HTMLDivElement>(null);
   const drawingRef = useRef(false);
   const currentStrokeRef = useRef<Stroke | null>(null);
+  /** Índice do último ponto já enviado como fim de segmento aos outros jogadores */
+  const lastSentPointIndexRef = useRef(-1);
 
   const [color, setColor] = useState("#1a1a1a");
   const [size, setSize] = useState(5);
@@ -115,11 +117,28 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, Props>(function Drawi
     );
   };
 
+  const flushStrokeSegments = useCallback(
+    (stroke: Stroke) => {
+      while (stroke.points.length > lastSentPointIndexRef.current + 1) {
+        const fromIdx =
+          lastSentPointIndexRef.current < 0 ? 0 : lastSentPointIndexRef.current;
+        const segment: Stroke = {
+          ...stroke,
+          points: [stroke.points[fromIdx], stroke.points[fromIdx + 1]],
+        };
+        lastSentPointIndexRef.current = fromIdx + 1;
+        void sendStroke(roomCode, playerId, segment);
+      }
+    },
+    [roomCode, playerId, sendStroke]
+  );
+
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!canDraw) return;
     updatePointerFromEvent(e.clientX, e.clientY);
     e.currentTarget.setPointerCapture(e.pointerId);
     drawingRef.current = true;
+    lastSentPointIndexRef.current = -1;
     const pt = getPoint(e);
     if (!pt) return;
     currentStrokeRef.current = {
@@ -147,16 +166,19 @@ export const DrawingCanvas = forwardRef<HTMLCanvasElement, Props>(function Drawi
       };
       drawStrokeOnContext(ctx, segment, w, h);
     }
+
+    flushStrokeSegments(stroke);
   };
 
-  const finishStroke = async () => {
+  const finishStroke = () => {
     if (!drawingRef.current || !currentStrokeRef.current) return;
     drawingRef.current = false;
     const stroke = currentStrokeRef.current;
     currentStrokeRef.current = null;
     if (stroke.points.length >= 2) {
-      await sendStroke(roomCode, playerId, stroke);
+      flushStrokeSegments(stroke);
     }
+    lastSentPointIndexRef.current = -1;
   };
 
   const onPointerLeaveCanvas = () => {

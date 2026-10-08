@@ -11,6 +11,38 @@ export function pickDrawer(players: Player[], previousDrawerId: string | null): 
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
+/** Tempo de “Preparar...” antes de cada rodada */
+export const ROUND_PREPARE_MS = 2000;
+/** Tempo da mensagem “Desenhar” / “Adivinhe o desenho” */
+export const ROUND_ROLE_MSG_MS = 2000;
+export const ROUND_INTRO_TOTAL_MS = ROUND_PREPARE_MS + ROUND_ROLE_MSG_MS;
+
+export function roundIntroElapsedMs(
+  roundStartedAt: string | null,
+  nowMs: number = Date.now()
+): number {
+  if (!roundStartedAt) return ROUND_INTRO_TOTAL_MS;
+  return nowMs - new Date(roundStartedAt).getTime();
+}
+
+export function isRoundIntroActive(
+  roundStartedAt: string | null,
+  nowMs: number = Date.now()
+): boolean {
+  return roundIntroElapsedMs(roundStartedAt, nowMs) < ROUND_INTRO_TOTAL_MS;
+}
+
+export function getRoundIntroText(
+  roundStartedAt: string | null,
+  isDrawer: boolean,
+  nowMs: number = Date.now()
+): string | null {
+  if (!roundStartedAt || !isRoundIntroActive(roundStartedAt, nowMs)) return null;
+  const elapsed = roundIntroElapsedMs(roundStartedAt, nowMs);
+  if (elapsed < ROUND_PREPARE_MS) return "Preparar...";
+  return isDrawer ? "Desenhar" : "Adivinhe o desenho";
+}
+
 export function remainingSeconds(
   roundStartedAt: string | null,
   roundDuration: number,
@@ -18,7 +50,10 @@ export function remainingSeconds(
 ): number {
   if (!roundStartedAt) return roundDuration;
   const started = new Date(roundStartedAt).getTime();
-  const elapsed = Math.floor((nowMs - started) / 1000);
+  const introMs = ROUND_INTRO_TOTAL_MS;
+  const gameplayStart = started + introMs;
+  if (nowMs < gameplayStart) return roundDuration;
+  const elapsed = Math.floor((nowMs - gameplayStart) / 1000);
   return Math.max(0, roundDuration - elapsed);
 }
 
